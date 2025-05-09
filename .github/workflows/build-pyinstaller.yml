@@ -12,7 +12,9 @@ jobs:
       matrix:
         include:
           - os: windows-latest
+            rid: win-x64
           - os: ubuntu-22.04
+            rid: linux-x64
     env:
       CMAKE_ARGS: "-DLLAMA_VULKAN=on"
       FORCE_CMAKE: "1"
@@ -53,7 +55,7 @@ jobs:
     - name: Upload build artifact
       uses: actions/upload-artifact@v4
       with:
-        name: art/${{ matrix.os }}-executable
+        name: ${{ matrix.rid }}
         path: dist/
 
   release:
@@ -87,10 +89,17 @@ jobs:
         echo "$COMMITS" >> $RUNNER_TEMP/commits.md
       
 
-    - name: Download build artifacts
+    - name: Download Windows artifact
       uses: actions/download-artifact@v4
       with:
-        path: artifacts
+        name: win-x64
+        path: art/windows
+
+    - name: Download Linux artifact
+      uses: actions/download-artifact@v4
+      with:
+        name: linux-x64
+        path: art/linux
 
     - name: Get current date and time
       id: datetime
@@ -114,7 +123,7 @@ jobs:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       with:
         upload_url: ${{ steps.create_release.outputs.upload_url }}
-        asset_path: art/windows-latest/main.exe
+        asset_path: art/windows/main.exe
         asset_name: LLMServer-${{ steps.datetime.outputs.current_datetime }}.exe
         asset_content_type: application/octet-stream
 
@@ -124,7 +133,7 @@ jobs:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       with:
         upload_url: ${{ steps.create_release.outputs.upload_url }}
-        asset_path: art/ubuntu-22.04/main
+        asset_path: art/linux/main
         asset_name: LLMServer-${{ steps.datetime.outputs.current_datetime }}
         asset_content_type: application/x-executable
 
