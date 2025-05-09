@@ -12,9 +12,7 @@ jobs:
       matrix:
         include:
           - os: windows-latest
-            rid: win-x64
-          - os: ubuntu-latest
-            rid: linux-x64
+          - os: ubuntu-22.04
     env:
       CMAKE_ARGS: "-DLLAMA_VULKAN=on"
       FORCE_CMAKE: "1"
@@ -38,32 +36,24 @@ jobs:
       run: uv sync
       shell: bash
 
-#    - name: Install llama-cpp-python with custom env flags (Linux/macOS)
-#      shell: bash
-#      run: |
-#        source .venv/bin/activate || .\.venv\Scripts\activate
-#        uv pip install llama-cpp-python --no-cache --reinstall
-#      if: runner.os == 'Windows'
-#
-#    - name: Install llama-cpp-python with custom env flags (Windows)
-#      shell: pwsh
-#      run: |
-#        .\.venv\Scripts\Activate.ps1
-#        $env:CMAKE_ARGS = "-DLLAMA_VULKAN=on"
-#        $env:FORCE_CMAKE = "1"
-#        uv pip install llama-cpp-python --no-cache --reinstall
-#      if: runner.os == 'Windows'
-
-    - name: Build executable with PyInstaller
+    - name: Build executable with PyInstaller (Linux/macOS)
+      if: runner.os != 'Windows'
       run: |
-        source .venv/bin/activate || .\.venv\Scripts\activate
+        source .venv/bin/activate
         pyinstaller --onefile --additional-hooks-dir hooks main.py
       shell: bash
+      
+    - name: Build executable with PyInstaller (Windows)
+      if: runner.os == 'Windows'
+      run: |
+        .\.venv\Scripts\Activate.ps1
+        pyinstaller --onefile --additional-hooks-dir hooks main.py
+      shell: pwsh
 
     - name: Upload build artifact
       uses: actions/upload-artifact@v4
       with:
-        name: ${{ matrix.os }}-executable
+        name: art/${{ matrix.os }}-executable
         path: dist/
 
   release:
@@ -118,7 +108,7 @@ jobs:
         draft: false
         prerelease: false
 
-    - name: Upload Windows EXE
+    - name: Upload Windows executable
       uses: actions/upload-release-asset@v1
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -128,13 +118,13 @@ jobs:
         asset_name: LLMServer-${{ steps.datetime.outputs.current_datetime }}.exe
         asset_content_type: application/octet-stream
 
-    - name: Upload Linux AppImage
+    - name: Upload Linux executable
       uses: actions/upload-release-asset@v1
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       with:
         upload_url: ${{ steps.create_release.outputs.upload_url }}
-        asset_path: art/ubuntu-latest/main
+        asset_path: art/ubuntu-22.04/main
         asset_name: LLMServer-${{ steps.datetime.outputs.current_datetime }}
         asset_content_type: application/x-executable
 
