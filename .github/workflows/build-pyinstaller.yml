@@ -1,0 +1,142 @@
+name: Build & Release
+
+on:
+  push:
+    branches: [main]
+
+jobs:
+  build:
+    name: Build artifacts
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        include:
+          - os: windows-latest
+            rid: win-x64
+          - os: ubuntu-22.04
+            rid: linux-x64
+
+    steps:
+    - name: Install Vulkan SDK
+      uses: jakoch/install-vulkan-sdk-action@v1
+      with:
+        cache: true
+
+    - name: Checkout code
+      uses: actions/checkout@v3
+
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: 3.13
+
+    - name: Install uv
+      run: pip install uv
+
+    - name: Install dependencies with uv
+      run: uv sync
+      shell: bash
+
+    - name: Build llama-cpp-python with Vulkan support
+      run: CMAKE_ARGS="-DGGML_VULKAN=on" uv pip install llama-cpp-python --no-cache
+      shell: bash
+
+    - name: Build executable with PyInstaller (Linux/macOS)
+      if: runner.os != 'Windows'
+      run: |
+        source .venv/bin/activate
+        pyinstaller --onefile --additional-hooks-dir hooks main.py
+      shell: bash
+      
+    - name: Build executable with PyInstaller (Windows)
+      if: runner.os == 'Windows'
+      run: |
+        .\.venv\Scripts\Activate.ps1
+        pyinstaller --onefile --additional-hooks-dir hooks main.py
+      shell: pwsh
+
+    - name: Upload build artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: ${{ matrix.rid }}
+        path: dist/
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout source
+      uses: actions/checkout@v4
+      with:
+        lfs: true
+        fetch-depth: 0
+
+    - name: Get commit history since last release
+      id: changelog
+      shell: bash
+      run: |
+        # Get the last tag (release), or fallback to the first commit if no tags are found
+        LAST_RELEASE=$(git describe --tags --abbrev=0 2>/dev/null || git rev-list --max-parents=0 HEAD)
+        echo "Last release: $LAST_RELEASE"
+  
+        # Get the commit log from the last release to the current commit
+        COMMITS=$(git log $LAST_RELEASE..HEAD --oneline)
+        echo "Commits since last release:"
+        echo "$COMMITS"
+  
+        # Save the commit log to a markdown file with additional information
+        echo "# Release Changelog for ${{ github.repository }}" > $RUNNER_TEMP/commits.md
+        echo "Release Date: $(date '+%Y-%m-%d %H:%M:%S')" >> $RUNNER_TEMP/commits.md
+        echo "### Changelog for Launcher build:" >> $RUNNER_TEMP/commits.md
+        echo "$COMMITS" >> $RUNNER_TEMP/commits.md
+      
+
+    - name: Download Windows artifact
+      uses: actions/download-artifact@v4
+      with:
+        name: win-x64
+        path: art/windows
+
+    - name: Download Linux artifact
+      uses: actions/download-artifact@v4
+      with:
+        name: linux-x64
+        path: art/linux
+
+    - name: Get current date and time
+      id: datetime
+      run: echo "::set-output name=current_datetime::$(date '+%Y-%m-%d-%H%M%S')"
+
+    - name: Create release
+      id: create_release
+      uses: actions/create-release@v1
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      with:
+        tag_name: release-${{ steps.datetime.outputs.current_datetime }}
+        release_name: Release ${{ steps.datetime.outputs.current_datetime }}
+        body_path: ${{ runner.temp }}/commits.md
+        draft: false
+        prerelease: false
+
+    - name: Upload Windows executable
+      uses: actions/upload-release-asset@v1
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      with:
+        upload_url: ${{ steps.create_release.outputs.upload_url }}
+        asset_path: art/windows/main.exe
+        asset_name: LLMServer-${{ steps.datetime.outputs.current_datetime }}.exe
+        asset_content_type: application/octet-stream
+
+    - name: Upload Linux executable
+      uses: actions/upload-release-asset@v1
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      with:
+        upload_url: ${{ steps.create_release.outputs.upload_url }}
+        asset_path: art/linux/main
+        asset_name: LLMServer-${{ steps.datetime.outputs.current_datetime }}
+        asset_content_type: application/x-executable
+

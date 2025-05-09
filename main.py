@@ -1,6 +1,7 @@
+import pathlib
 import traceback
 from flask import Flask, request, jsonify
-from llama_cpp import Llama
+from llama_cpp import Llama, llama_cpp, load_shared_library
 import time  # Add this import at the top with other imports
 
 app = Flask(__name__)
@@ -214,7 +215,20 @@ def status():
     Returns ids of all loaded models.
     """
     global models
-    return jsonify({"healthy": True, "models": list(models.keys())}), 200
+
+    gpu = False
+    try:
+        p = pathlib.Path(llama_cpp.__file__).parent
+        lib = load_shared_library('llama', pathlib.Path(p) / 'lib')
+        gpu = bool(lib.llama_supports_gpu_offload())
+    except:
+        pass
+    
+    return jsonify({
+        "healthy": True,
+        "models": list(models.keys()),
+        "gpu": gpu
+    }), 200
 
 
 def format_chat_messages(messages):
