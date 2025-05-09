@@ -15,9 +15,9 @@ jobs:
             rid: win-x64
           - os: ubuntu-latest
             rid: linux-x64
-
     env:
-      MAIN_PY_FILE: 'main.py'
+      CMAKE_ARGS: "-DLLAMA_VULKAN=on"
+      FORCE_CMAKE: "1"
 
     steps:
     - name: Checkout code
@@ -38,26 +38,26 @@ jobs:
       run: uv sync
       shell: bash
 
-    - name: Install llama-cpp-python with custom env flags (Linux/macOS)
-      shell: bash
-      run: |
-        source .venv/bin/activate || .\.venv\Scripts\activate
-        CMAKE_ARGS="-DLLAMA_VULKAN=on" FORCE_CMAKE=1 uv pip install llama-cpp-python --no-cache --reinstall
-      if: runner.os == 'Windows'
-
-    - name: Install llama-cpp-python with custom env flags (Windows)
-      shell: pwsh
-      run: |
-        .\.venv\Scripts\Activate.ps1
-        $env:CMAKE_ARGS = "-DLLAMA_VULKAN=on"
-        $env:FORCE_CMAKE = "1"
-        uv pip install llama-cpp-python --no-cache --reinstall
-      if: runner.os == 'Windows'
+#    - name: Install llama-cpp-python with custom env flags (Linux/macOS)
+#      shell: bash
+#      run: |
+#        source .venv/bin/activate || .\.venv\Scripts\activate
+#        uv pip install llama-cpp-python --no-cache --reinstall
+#      if: runner.os == 'Windows'
+#
+#    - name: Install llama-cpp-python with custom env flags (Windows)
+#      shell: pwsh
+#      run: |
+#        .\.venv\Scripts\Activate.ps1
+#        $env:CMAKE_ARGS = "-DLLAMA_VULKAN=on"
+#        $env:FORCE_CMAKE = "1"
+#        uv pip install llama-cpp-python --no-cache --reinstall
+#      if: runner.os == 'Windows'
 
     - name: Build executable with PyInstaller
       run: |
         source .venv/bin/activate || .\.venv\Scripts\activate
-        pyinstaller --one-file --additional-hooks-dir hooks main.py
+        pyinstaller --onefile --additional-hooks-dir hooks main.py
       shell: bash
 
     - name: Upload build artifact
