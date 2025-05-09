@@ -15,9 +15,6 @@ jobs:
             rid: win-x64
           - os: ubuntu-22.04
             rid: linux-x64
-    env:
-      CMAKE_ARGS: "-DLLAMA_VULKAN=on"
-      FORCE_CMAKE: "1"
 
     steps:
     - name: Checkout code
@@ -31,11 +28,12 @@ jobs:
     - name: Install uv
       run: pip install uv
 
-    - name: Create virtual environment with uv
-      run: uv venv .venv
-
     - name: Install dependencies with uv
       run: uv sync
+      shell: bash
+
+    - name: Build llama-cpp-python with Vulkan support
+      run: CMAKE_ARGS="-DGGML_VULKAN=on" uv pip install llama-cpp-python --no-cache
       shell: bash
 
     - name: Build executable with PyInstaller (Linux/macOS)
