@@ -32,11 +32,10 @@ jobs:
       run: uv sync
       shell: bash
 
-    - name: Install glslc (Linux)
-      if: runner.os != 'Windows'
-      run: |
-        sudo apt-get update
-        sudo apt-get install -y glslc
+    - name: Install Vulkan SDK
+      uses: jakoch/install-vulkan-sdk-action@v1
+      with:
+        cache: true
 
     - name: Build llama-cpp-python with Vulkan support
       run: CMAKE_ARGS="-DGGML_VULKAN=on" uv pip install llama-cpp-python --no-cache
