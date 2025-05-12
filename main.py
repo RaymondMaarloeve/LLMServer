@@ -141,7 +141,7 @@ def chat():
 
 
                 # Check for any of the tags
-                tags = ["<assistant>", "<human>", "<npc>", "<system>"]
+                tags = ["<assistant>", "<human>", "<npc>", "<system>", "</assistant>", "</human>", "</npc>", "</system>"]
                 for tag in tags:
                     if tag in lower_generated_text:
                         print(f"Found tag: {tag}")
