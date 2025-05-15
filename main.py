@@ -230,6 +230,59 @@ def status():
         "gpu": gpu
     }), 200
 
+@app.route("/list-files", methods=["POST"])
+def list_files():
+    """
+    List files in the specified directory.
+
+    Expected JSON payload:
+    {
+        "directory": "path/to/directory"  // required: path to the directory to list
+    }
+    """
+    data = request.get_json()
+    if not data:
+        return jsonify({"message": "No input data provided.", "success": False}), 400
+
+    directory = data.get("directory")
+    if not directory:
+        return jsonify({"message": "Missing required parameter: 'directory'.", "success": False}), 400
+
+    try:
+        dir_path = pathlib.Path(directory)
+
+        if not dir_path.exists():
+            return jsonify({
+                "message": f"Directory '{directory}' does not exist.",
+                "success": False
+            }), 404
+
+        if not dir_path.is_dir():
+            return jsonify({
+                "message": f"'{directory}' is not a directory.",
+                "success": False
+            }), 400
+
+        # Get only files
+        files = [
+            {
+                "name": item.name,
+                "path": str(item)
+            }
+            for item in dir_path.iterdir()
+            if item.is_file()
+        ]
+
+        return jsonify({
+            "success": True,
+            "files": files
+        }), 200
+
+    except Exception as e:
+        return jsonify({
+            "message": f"Failed to list files: {str(e)}",
+            "success": False
+        }), 500
 
 def format_chat_messages(messages):
     """

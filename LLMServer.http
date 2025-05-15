@@ -48,3 +48,11 @@ Content-Type: application/json
 {
   "model_id": "tuned-model"
 }
+
+### List files in directory
+POST http://localhost:5000/list-files
+Content-Type: application/json
+
+{
+  "directory": "/home/gitmanik/Desktop/Raymond/Models"
+}
