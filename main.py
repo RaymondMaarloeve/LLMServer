@@ -30,7 +30,7 @@ def load_model():
          "n_gpu_layers": -1                       // optional: number of layers to offload to GPU, -1 for all (default: -1)
     }
     """
-    global models
+    global models, registered_models
     data = request.get_json()
     if not data:
         return jsonify({"message": "No input data provided.", "success": False}), 400
@@ -40,6 +40,10 @@ def load_model():
 
     if not model_id or not model_path:
         return jsonify({"message": "Missing required parameters: 'model_id' and 'model_path'.", "success": False}), 400
+
+    # Register model_id and model_path if not already registered
+    if model_id not in registered_models:
+        registered_models[model_id] = model_path
 
     if model_id in models:
         return jsonify({"message": f"Model with ID '{model_id}' is already loaded.", "success": False}), 400
@@ -79,7 +83,6 @@ def chat():
     Expected JSON payload:
     {
         "model_id": "unique_model_identifier",  // required: specifies which model to use
-        "model_path": "path/to/ggml-model.bin", // optional: path to the model file if not loaded
         "messages": [                            // required: array of message objects
             {"role": "system", "content": "You are a helpful assistant."}, // optional system message
             {"role": "user", "content": "Hello, how are you?"},            // user messages
@@ -93,54 +96,53 @@ def chat():
 
     Returns just the generated assistant response text.
     """
-    global models
+    global models, registered_models
     data = request.get_json()
     if not data:
         return jsonify({"message": "No input data provided.", "success": False}), 400
 
     model_id = data.get("model_id")
-    model_path = data.get("model_path")
     messages = data.get("messages", [])
 
     if not model_id or not messages:
         return jsonify({"message": "Missing required parameters: 'model_id' and 'messages'.", "success": False}), 400
 
+    # Check if the model is registered
+    model_path = registered_models.get(model_id)
     if model_path is None:
-        model = models.get(model_id)
-        if model is None:
-            return jsonify({"message": f"Model '{model_id}' is not loaded and no 'model_path' provided.", "success": False}), 400
-    else:
-        # 1. Unload all models except the requested one
-        to_unload = [mid for mid in models if mid != model_id]
-        for mid in to_unload:
-            try:
-                models.pop(mid)
-            except Exception:
-                pass  # Ignore unload errors
+        return jsonify({"message": f"Model '{model_id}' is not registered. Register it first using /register.", "success": False}), 400
 
-        # 2. Load the requested model if not loaded
-        model = models.get(model_id)
-        if model is None:
-            n_ctx = data.get("n_ctx", 1024)
-            n_parts = data.get("n_parts", -1)
-            seed = data.get("seed", 42)
-            f16_kv = data.get("f16_kv", False)
-            n_gpu_layers = data.get("n_gpu_layers", -1)
-            try:
-                model = Llama(
-                    model_path=model_path,
-                    n_ctx=n_ctx,
-                    n_parts=n_parts,
-                    seed=seed,
-                    f16_kv=f16_kv,
-                    n_gpu_layers=n_gpu_layers,
-                )
-                models[model_id] = model
-            except Exception as e:
-                return jsonify({
-                    "message": f"Failed to load model '{model_id}': {str(e)}\ntrace: {traceback.format_exc()}",
-                    "success": False
-                }), 500
+    # Unload all models except the requested one
+    to_unload = [mid for mid in models if mid != model_id]
+    for mid in to_unload:
+        try:
+            models.pop(mid)
+        except Exception:
+            pass  # Ignore unload errors
+
+    # Load the requested model if not loaded
+    model = models.get(model_id)
+    if model is None:
+        n_ctx = data.get("n_ctx", 1024)
+        n_parts = data.get("n_parts", -1)
+        seed = data.get("seed", 42)
+        f16_kv = data.get("f16_kv", False)
+        n_gpu_layers = data.get("n_gpu_layers", -1)
+        try:
+            model = Llama(
+                model_path=model_path,
+                n_ctx=n_ctx,
+                n_parts=n_parts,
+                seed=seed,
+                f16_kv=f16_kv,
+                n_gpu_layers=n_gpu_layers,
+            )
+            models[model_id] = model
+        except Exception as e:
+            return jsonify({
+                "message": f"Failed to load model '{model_id}': {str(e)}\ntrace: {traceback.format_exc()}",
+                "success": False
+            }), 500
 
     # 3. Validate messages
     for msg in messages:
@@ -174,16 +176,10 @@ def chat():
                 token = response["choices"][0]["text"]
                 generated_text += token
                 lower_generated_text = generated_text.lower()
-
-
-                # Check for any of the tags
                 tags = ["<assistant>", "<human>", "<npc>", "<system>", "</assistant>", "</human>", "</npc>", "</system>"]
                 for tag in tags:
                     if tag in lower_generated_text:
-                        print(f"Found tag: {tag}")
-                        # Find the position of the tag
                         tag_pos = lower_generated_text.find(tag)
-                        # Keep only the text before the tag
                         generated_text = generated_text[:tag_pos]
                         stop_generating = True
                         break
