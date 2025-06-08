@@ -192,6 +192,7 @@ def chat():
         return jsonify({
             "response": generated_text.strip(),
             "generation_time": round(generation_time, 3),  # Round to 3 decimal places
+            "model_id": model_id,
             "total_tokens": total_tokens,
             "success": True
         }), 200
