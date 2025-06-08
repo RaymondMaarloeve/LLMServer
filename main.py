@@ -10,6 +10,9 @@ app = Flask(__name__)
 # Each key is a unique string model_id and the value is its Llama instance.
 models = {}
 
+# Global dictionary to store registered model_id -> model_path mappings
+registered_models = {}
+
 
 @app.route("/load", methods=["POST"])
 def load_model():
@@ -312,6 +315,33 @@ def list_files():
             "message": f"Failed to list files: {str(e)}",
             "success": False
         }), 500
+
+@app.route("/register", methods=["POST"])
+def register_model():
+    """
+    Register a model_id with a model_path for later use.
+
+    Expected JSON payload:
+    {
+        "model_id": "unique_model_identifier",   // required
+        "model_path": "path/to/ggml-model.bin"   // required
+    }
+    """
+    data = request.get_json()
+    if not data:
+        return jsonify({"message": "No input data provided.", "success": False}), 400
+
+    model_id = data.get("model_id")
+    model_path = data.get("model_path")
+
+    if not model_id or not model_path:
+        return jsonify({"message": "Missing required parameters: 'model_id' and 'model_path'.", "success": False}), 400
+
+    registered_models[model_id] = model_path
+    return jsonify({
+        "message": f"Model '{model_id}' registered with path '{model_path}'.",
+        "success": True
+    }), 200
 
 def format_chat_messages(messages):
     """
