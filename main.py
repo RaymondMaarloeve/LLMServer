@@ -10,6 +10,9 @@ app = Flask(__name__)
 # Each key is a unique string model_id and the value is its Llama instance.
 models = {}
 
+# Global dictionary to store registered model_id -> model_path mappings
+registered_models = {}
+
 
 @app.route("/load", methods=["POST"])
 def load_model():
@@ -27,7 +30,7 @@ def load_model():
          "n_gpu_layers": -1                       // optional: number of layers to offload to GPU, -1 for all (default: -1)
     }
     """
-    global models
+    global models, registered_models
     data = request.get_json()
     if not data:
         return jsonify({"message": "No input data provided.", "success": False}), 400
@@ -37,6 +40,10 @@ def load_model():
 
     if not model_id or not model_path:
         return jsonify({"message": "Missing required parameters: 'model_id' and 'model_path'.", "success": False}), 400
+
+    # Register model_id and model_path if not already registered
+    if model_id not in registered_models:
+        registered_models[model_id] = model_path
 
     if model_id in models:
         return jsonify({"message": f"Model with ID '{model_id}' is already loaded.", "success": False}), 400
@@ -89,7 +96,7 @@ def chat():
 
     Returns just the generated assistant response text.
     """
-    global models
+    global models, registered_models
     data = request.get_json()
     if not data:
         return jsonify({"message": "No input data provided.", "success": False}), 400
@@ -100,16 +107,49 @@ def chat():
     if not model_id or not messages:
         return jsonify({"message": "Missing required parameters: 'model_id' and 'messages'.", "success": False}), 400
 
+    # Check if the model is registered
+    model_path = registered_models.get(model_id)
+    if model_path is None:
+        return jsonify({"message": f"Model '{model_id}' is not registered. Register it first using /register.", "success": False}), 400
+
+    # Unload all models except the requested one
+    to_unload = [mid for mid in models if mid != model_id]
+    for mid in to_unload:
+        try:
+            models.pop(mid)
+        except Exception:
+            pass  # Ignore unload errors
+
+    # Load the requested model if not loaded
+    model = models.get(model_id)
+    if model is None:
+        n_ctx = data.get("n_ctx", 1024)
+        n_parts = data.get("n_parts", -1)
+        seed = data.get("seed", 42)
+        f16_kv = data.get("f16_kv", False)
+        n_gpu_layers = data.get("n_gpu_layers", -1)
+        try:
+            model = Llama(
+                model_path=model_path,
+                n_ctx=n_ctx,
+                n_parts=n_parts,
+                seed=seed,
+                f16_kv=f16_kv,
+                n_gpu_layers=n_gpu_layers,
+            )
+            models[model_id] = model
+        except Exception as e:
+            return jsonify({
+                "message": f"Failed to load model '{model_id}': {str(e)}\ntrace: {traceback.format_exc()}",
+                "success": False
+            }), 500
+
+    # 3. Validate messages
     for msg in messages:
         if not isinstance(msg, dict) or "role" not in msg or "content" not in msg:
             return jsonify({"message": "Invalid message format. Each message must have 'role' and 'content' fields.", "success": False}), 400
         if msg["role"] not in ["system", "user", "assistant"]:
             return jsonify({"message": f"Invalid role: '{msg['role']}'. Must be 'system', 'user', or 'assistant'.", "success": False}), 400
-
-    # Check if the specified model is loaded.
-    model = models.get(model_id)
-    if model is None:
-        return jsonify({"message": f"No loaded model found for model_id '{model_id}'.", "success": False}), 400
 
     # Optional parameters with default values
     max_tokens = data.get("max_tokens", 100)
@@ -122,10 +162,8 @@ def chat():
         
         # Generate response using the loaded LLaMA model
         start_time = time.time()
-
         generated_text = ""
         total_tokens = 0
-
         stop_generating = False
         for response in model(
                 formatted_prompt,
@@ -138,35 +176,26 @@ def chat():
                 token = response["choices"][0]["text"]
                 generated_text += token
                 lower_generated_text = generated_text.lower()
-
-
-                # Check for any of the tags
                 tags = ["<assistant>", "<human>", "<npc>", "<system>", "</assistant>", "</human>", "</npc>", "</system>"]
                 for tag in tags:
                     if tag in lower_generated_text:
-                        print(f"Found tag: {tag}")
-                        # Find the position of the tag
                         tag_pos = lower_generated_text.find(tag)
-                        # Keep only the text before the tag
                         generated_text = generated_text[:tag_pos]
                         stop_generating = True
                         break
-
                 if stop_generating:
                     break
-
                 total_tokens += 1
 
         # Calculate generation time
         generation_time = time.time() - start_time
-
         return jsonify({
             "response": generated_text.strip(),
             "generation_time": round(generation_time, 3),  # Round to 3 decimal places
+            "model_id": model_id,
             "total_tokens": total_tokens,
             "success": True
         }), 200
-
     except Exception as e:
         return jsonify({
             "message": f"Chat completion failed for model '{model_id}': {str(e)}\ntrace:{traceback.format_exc()}",
@@ -283,6 +312,33 @@ def list_files():
             "message": f"Failed to list files: {str(e)}",
             "success": False
         }), 500
+
+@app.route("/register", methods=["POST"])
+def register_model():
+    """
+    Register a model_id with a model_path for later use.
+
+    Expected JSON payload:
+    {
+        "model_id": "unique_model_identifier",   // required
+        "model_path": "path/to/ggml-model.bin"   // required
+    }
+    """
+    data = request.get_json()
+    if not data:
+        return jsonify({"message": "No input data provided.", "success": False}), 400
+
+    model_id = data.get("model_id")
+    model_path = data.get("model_path")
+
+    if not model_id or not model_path:
+        return jsonify({"message": "Missing required parameters: 'model_id' and 'model_path'.", "success": False}), 400
+
+    registered_models[model_id] = model_path
+    return jsonify({
+        "message": f"Model '{model_id}' registered with path '{model_path}'.",
+        "success": True
+    }), 200
 
 def format_chat_messages(messages):
     """
