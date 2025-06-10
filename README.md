@@ -81,6 +81,7 @@ pyinstaller --onefile main.py
 | `/unload`     | Release model resources                  |
 | `/status`     | Check available models and GPU status    |
 | `/list-files` | List files in a specified directory      |
+| `/register`   | Register a model for lazy-loading        |
 
 ---
 
