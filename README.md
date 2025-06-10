@@ -69,7 +69,8 @@ Main repo:
 
 To build a standalone version:
 ```bash
-pyinstaller --onefile main.py
+ CMAKE_ARGS="-DGGML_VULKAN=on" uv pip install llama-cpp-python --no-cache
+ uv run pyinstaller --onefile --additional-hooks-dir hooks main.py
 ```
 
 ## 🔍 API Endpoints
