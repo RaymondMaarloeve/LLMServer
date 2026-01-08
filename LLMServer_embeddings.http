@@ -1,0 +1,167 @@
+### Raymond Maarloeve LLMServer - API Examples with Embeddings
+
+# Zmienne
+@baseUrl = http://localhost:5000
+@modelId = test_model
+
+###############################################################################
+# 1. Sprawdź status serwera
+###############################################################################
+
+GET {{baseUrl}}/status
+
+###############################################################################
+# 2. Zarejestruj model (zmień ścieżkę na swoją)
+###############################################################################
+
+POST {{baseUrl}}/register
+Content-Type: application/json
+
+{
+  "model_id": "{{modelId}}",
+  "model_path": "models/your-model.gguf"
+}
+
+###############################################################################
+# 3. EMBEDDINGI - Dodaj kontekst postaci
+###############################################################################
+
+### Dodaj kowala
+POST {{baseUrl}}/add-character-context
+Content-Type: application/json
+
+{
+  "character_id": "kowal_jan",
+  "name": "Jan Kowal",
+  "context": "Jesteś Janem Kowalem, doświadczonym kowalem pracującym w małej wiosce. Masz 45 lat i prowadzisz kuźnię. Jesteś znany z wysokiej jakości mieczy. Mówisz w prosty, bezpośredni sposób. Jesteś ostrożny wobec obcych."
+}
+
+### Dodaj księdza
+POST {{baseUrl}}/add-character-context
+Content-Type: application/json
+
+{
+  "character_id": "ksiadz_tomasz",
+  "name": "Ojciec Tomasz",
+  "context": "Jesteś Ojcem Tomaszem, miejscowym księdzem. Masz 52 lata i służysz wspólnocie od 20 lat. Mówisz spokojnie i rozważnie, często przytaczając fragmenty Pisma Świętego. Jesteś empatyczny ale surowy w moralności."
+}
+
+### Dodaj karczmarkę
+POST {{baseUrl}}/add-character-context
+Content-Type: application/json
+
+{
+  "character_id": "karczmarka_anna",
+  "name": "Anna Karczmarka",
+  "context": "Jesteś Anną, właścicielką karczmy 'Pod Dzikim Knurem'. Masz 38 lat i jesteś wdową. Twoja karczma to centrum życia towarzyskiego - tutaj krążą plotki. Jesteś gadatliwa, ciekawska i masz doskonałą pamięć. Lubisz dobrą opowieść i piwo."
+}
+
+###############################################################################
+# 4. EMBEDDINGI - Pobierz kontekst postaci
+###############################################################################
+
+### Pobierz konkretną postać po ID
+POST {{baseUrl}}/get-character-context
+Content-Type: application/json
+
+{
+  "character_id": "kowal_jan"
+}
+
+### Wyszukiwanie semantyczne - kto robi broń?
+POST {{baseUrl}}/get-character-context
+Content-Type: application/json
+
+{
+  "query": "kto robi miecze i broń",
+  "n_results": 2
+}
+
+### Wyszukiwanie semantyczne - gdzie napić się piwa?
+POST {{baseUrl}}/get-character-context
+Content-Type: application/json
+
+{
+  "query": "gdzie mogę napić się piwa i posłuchać plotek",
+  "n_results": 1
+}
+
+###############################################################################
+# 5. EMBEDDINGI - Lista wszystkich postaci
+###############################################################################
+
+GET {{baseUrl}}/list-characters
+
+###############################################################################
+# 6. CHAT z automatycznym pobieraniem kontekstu (character_id)
+###############################################################################
+
+POST {{baseUrl}}/chat
+Content-Type: application/json
+
+{
+  "model_id": "{{modelId}}",
+  "character_id": "kowal_jan",
+  "messages": [
+    {
+      "role": "user",
+      "content": "Witaj! Słyszałem, że robisz najlepsze miecze w okolicy."
+    }
+  ],
+  "max_tokens": 150,
+  "temperature": 0.8
+}
+
+###############################################################################
+# 7. CHAT z semantycznym wyszukiwaniem kontekstu (use_embedding)
+###############################################################################
+
+POST {{baseUrl}}/chat
+Content-Type: application/json
+
+{
+  "model_id": "{{modelId}}",
+  "use_embedding": true,
+  "messages": [
+    {
+      "role": "user",
+      "content": "Potrzebuję naprawić mój miecz, który mi się złamał w walce."
+    }
+  ],
+  "max_tokens": 150,
+  "temperature": 0.8
+}
+
+###############################################################################
+# 8. CHAT tradycyjny (bez embeddingów)
+###############################################################################
+
+POST {{baseUrl}}/chat
+Content-Type: application/json
+
+{
+  "model_id": "{{modelId}}",
+  "messages": [
+    {
+      "role": "system",
+      "content": "Jesteś pomocnym asystentem w średniowiecznej grze."
+    },
+    {
+      "role": "user",
+      "content": "Co dziś porabiasz?"
+    }
+  ],
+  "max_tokens": 100,
+  "temperature": 0.8
+}
+
+###############################################################################
+# 9. Wyładuj model
+###############################################################################
+
+POST {{baseUrl}}/unload
+Content-Type: application/json
+
+{
+  "model_id": "{{modelId}}"
+}

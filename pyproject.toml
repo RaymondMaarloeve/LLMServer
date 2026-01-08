@@ -5,5 +5,8 @@ description = "RaymondMaarloeve LLMServer"
 requires-python = ">=3.12"
 dependencies = [
     "flask>=3.1.0",
+    "llama-cpp-python==0.2.90",
     "pyinstaller>=6.13.0",
+    "chromadb>=0.4.22",
+    "sentence-transformers>=2.2.2",
 ]

@@ -183,3 +183,20 @@ fabric.properties
 
 # idea folder, uncomment if you don't need it
 .idea
+
+# ChromaDB vector database
+chroma_db/
+*.chroma
+
+# Sentence Transformers cache
+.cache/
+sentence_transformers/
+
+# Model files (usually large)
+models/
+*.gguf
+*.bin
+*.safetensors
+
+# Test data
+test_chroma_db/

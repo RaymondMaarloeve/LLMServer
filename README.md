@@ -16,6 +16,11 @@ Full project documentation is available at:
 Main repo:
 🔗 **[https://github.com/RaymondMaarloeve/RaymondMaarloeve](https://github.com/RaymondMaarloeve/RaymondMaarloeve)**  
 
+### 🧠 Embeddings & Character Management
+- **[Quick Start Guide](QUICKSTART.md)** - Get embeddings running in 5 minutes
+- **[Full Embeddings Documentation](EMBEDDINGS.md)** - Complete guide (Polish)
+- **[HTTP Examples](LLMServer_embeddings.http)** - API request examples  
+
 ## ✨ Features
 
 - 🔁 Supports multiple LLMs simultaneously (`model_id`)
@@ -23,12 +28,17 @@ Main repo:
 - 🚦 Automatic response termination detection using special tags (`<npc>`, `<human>`, etc.)
 - 🧹 Ability to unload models from memory (`/unload`)
 - 📂 File browsing via API (`/list-files`)
+- 🧠 **Vector database with embeddings** for NPC character contexts
+- 🔍 **Semantic search** for automatic character context retrieval
+- 🎭 **Character management** endpoints for medieval game NPCs
 
 ## 🧩 Technologies
 
 - [Python 3.12](https://www.python.org/)
 - [Flask](https://flask.palletsprojects.com/) – REST API
 - [llama-cpp-python](https://github.com/abetlen/llama-cpp-python) – interface for local LLaMA models
+- [ChromaDB](https://www.trychroma.com/) – vector database for character embeddings
+- [Sentence Transformers](https://www.sbert.net/) – semantic embeddings for NPC contexts
 - [PyInstaller](https://pyinstaller.org/) – server binary packaging
 
 ## 🚀 Usage
@@ -54,16 +64,67 @@ Main repo:
    POST /chat
    {
      "model_id": "npc_village",
+     "character_id": "kowal_jan",  // automatic context from vector DB
      "messages": [
-       {"role": "system", "content": "You are a grumpy blacksmith."},
-       {"role": "user", "content": "Hello there!"},
-       {"role": "assistant", "content": "Hmph. What do you want?"},
-       {"role": "user", "content": "Got any gossip?"}
+       {"role": "user", "content": "Hello there!"}
+     ]
+   }
+   ```
+   
+   Or use semantic search:
+   ```json
+   POST /chat
+   {
+     "model_id": "npc_village",
+     "use_embedding": true,  // auto-find best matching character
+     "messages": [
+       {"role": "user", "content": "Who can fix my sword?"}
      ]
    }
    ```
 
 4. Receive the response and display it in-game.
+
+## 🎭 Character Context Management
+
+The server includes a vector database for storing and retrieving NPC character contexts using embeddings.
+
+### Adding Characters
+
+```bash
+# Load example characters
+python load_characters.py
+
+# List all characters
+python load_characters.py list
+
+# Test semantic search
+python load_characters.py test
+```
+
+### API Example
+
+```json
+POST /add-character-context
+{
+  "character_id": "blacksmith_john",
+  "name": "John the Blacksmith",
+  "context": "You are John, a grumpy blacksmith who..."
+}
+```
+
+The character context will be automatically embedded and stored. You can then use it in chat requests:
+
+```json
+POST /chat
+{
+  "model_id": "npc_model",
+  "character_id": "blacksmith_john",
+  "messages": [
+    {"role": "user", "content": "Can you fix my sword?"}
+  ]
+}
+```
 
 ## 🛠 Building
 
@@ -75,14 +136,17 @@ To build a standalone version:
 
 ## 🔍 API Endpoints
 
-| Endpoint      | Description                              |
-|---------------|------------------------------------------|
-| `/load`       | Load a model into memory                 |
-| `/chat`       | Generate a response in chat style        |
-| `/unload`     | Release model resources                  |
-| `/status`     | Check available models and GPU status    |
-| `/list-files` | List files in a specified directory      |
-| `/register`   | Register a model for lazy-loading        |
+| Endpoint                    | Description                                        |
+|-----------------------------|----------------------------------------------------|
+| `/load`                     | Load a model into memory                           |
+| `/chat`                     | Generate a response in chat style                  |
+| `/unload`                   | Release model resources                            |
+| `/status`                   | Check available models and GPU status              |
+| `/list-files`               | List files in a specified directory                |
+| `/register`                 | Register a model for lazy-loading                  |
+| `/add-character-context`    | Add/update character context with embeddings       |
+| `/get-character-context`    | Retrieve character context by ID or semantic query |
+| `/list-characters`          | List all stored character contexts                 |
 
 ---
 
