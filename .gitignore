@@ -200,3 +200,6 @@ models/
 
 # Test data
 test_chroma_db/
+
+# Qwen model folder
+qwen-3b-distilled_latest/
