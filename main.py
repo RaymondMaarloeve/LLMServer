@@ -1,10 +1,12 @@
 import pathlib
 import traceback
 from flask import Flask, request, jsonify
-from llama_cpp import Llama
-import time  # Add this import at the top with other imports
+import torch
+from transformers import AutoModelForCausalLM, AutoTokenizer
+import time
 import chromadb
 from chromadb.utils import embedding_functions
+import json
 
 app = Flask(__name__)
 
@@ -22,38 +24,75 @@ except Exception as e:
     print(f"Warning: Could not initialize ChromaDB collection: {e}")
     character_contexts = None
 
-# Global dictionary to store multiple LLaMA model instances.
-# Each key is a unique string model_id and the value is its Llama instance.
+# Global dictionary to store model instances
+# Each key is a unique string model_id and the value is a dict with 'model' and 'tokenizer'
 models = {}
 
 # Global dictionary to store registered model_id -> model_path mappings
 registered_models = {}
 
+# Global dictionary to store memory capsules (embedding tensors) for each model
+# key: model_id, value: torch.Tensor with pre-computed embeddings
+memory_capsules = {}
 
-@app.route("/", methods=["GET"])
-def index():
-    """Health check endpoint."""
-    return jsonify({
-        "message": "LLMServer is running",
-        "loaded_models": list(models.keys()),
-        "endpoints": ["/load", "/chat", "/complete", "/embeddings", "/search_context", "/load_characters"]
-    }), 200
+
+def load_memory_capsule(model_path: str, model_id: str, device: str = "cuda"):
+    """
+    Wczytuje kapsułę pamięci z pre-computed embeddingami (.pt file).
+    
+    Args:
+        model_path: Ścieżka do folderu modelu
+        model_id: ID modelu
+        device: Urządzenie do załadowania tensorów (cuda/cpu)
+    """
+    global memory_capsules
+    
+    try:
+        model_dir = pathlib.Path(model_path)
+        if model_dir.is_file():
+            model_dir = model_dir.parent
+        
+        capsule_path = model_dir / "memory_capsule.pt"
+        meta_path = model_dir / "memory_capsule_meta.json"
+        
+        if capsule_path.exists():
+            print(f"🧠 Wczytywanie kapsuły EMBEDDINGÓW dla modelu '{model_id}' z: {capsule_path}")
+            
+            # Wczytaj tensor z embeddingami
+            embeddings = torch.load(capsule_path, map_location=device)
+            memory_capsules[model_id] = embeddings
+            
+            # Wczytaj metadane jeśli istnieją
+            if meta_path.exists():
+                with open(meta_path, 'r', encoding='utf-8') as f:
+                    meta = json.load(f)
+                print(f"✅ Kapsuła wczytana: {meta.get('num_tokens', '?')} tokenów, wymiar {meta.get('embedding_dim', '?')}")
+            else:
+                print(f"✅ Kapsuła wczytana: shape {embeddings.shape}")
+            
+            return True
+        else:
+            print(f"ℹ️ Brak kapsuły embeddingów dla modelu '{model_id}' w: {model_dir}")
+            return False
+            
+    except Exception as e:
+        print(f"⚠️ Błąd podczas wczytywania kapsuły pamięci: {e}")
+        return False
 
 
 @app.route("/load", methods=["POST"])
 def load_model():
     """
-    Load a LLaMA model using llama-cpp-python under a specific model ID.
+    Load a model using PyTorch/Transformers with support for embedding capsules.
 
     Expected JSON payload:
     {
-         "model_id": "unique_model_identifier",   // required: used to reference the model later
-         "model_path": "path/to/ggml-model.bin",  // required: path to the model file
-         "n_ctx": 1024,                           // optional: context window size (default: 1024)
-         "n_parts": -1,                           // optional: number of model parts, -1 auto-detects parts
-         "seed": 42,                              // optional: RNG seed (default: 42)
-         "f16_kv": false,                         // optional: whether to use fp16 key-value caching
-         "n_gpu_layers": -1                       // optional: number of layers to offload to GPU, -1 for all (default: -1)
+         "model_id": "unique_model_identifier",   // required
+         "model_path": "path/to/model",           // required: HuggingFace model path or local folder
+         "device": "cuda",                        // optional: cuda/cpu (default: auto-detect)
+         "torch_dtype": "float16",                // optional: float16/float32/auto (default: auto)
+         "use_4bit": false,                       // optional: use 4-bit quantization (default: false)
+         "max_length": 2048                       // optional: max context length (default: 2048)
     }
     """
     global models, registered_models
@@ -67,34 +106,118 @@ def load_model():
     if not model_id or not model_path:
         return jsonify({"message": "Missing required parameters: 'model_id' and 'model_path'.", "success": False}), 400
 
-    # Register model_id and model_path if not already registered
+    # Register model_id and model_path
     if model_id not in registered_models:
         registered_models[model_id] = model_path
 
     if model_id in models:
         return jsonify({"message": f"Model with ID '{model_id}' is already loaded.", "success": False}), 400
 
-    # Use provided parameters or default values.
-    n_ctx = data.get("n_ctx", 1024)
-    n_parts = data.get("n_parts", -1)
-    seed = data.get("seed", 42)
-    f16_kv = data.get("f16_kv", False)
-    n_gpu_layers = data.get("n_gpu_layers", -1)  # -1 offloads all layers to GPU
+    # Parameters
+    device = data.get("device", "cuda" if torch.cuda.is_available() else "cpu")
+    torch_dtype_str = data.get("torch_dtype", "auto")
+    use_4bit = data.get("use_4bit", False)
+    max_length = data.get("max_length", 2048)
+    
+    # LoRA adapter support
+    is_lora = data.get("is_lora", False)
+    base_model_path = data.get("base_model_path", None)
+    merge_adapter = data.get("merge_adapter", True)  # Domyślnie merge dla wydajności
 
     try:
-        model = Llama(
-            model_path=model_path,
-            n_ctx=n_ctx,
-            n_parts=n_parts,
-            seed=seed,
-            f16_kv=f16_kv,
-            n_gpu_layers=n_gpu_layers,
-        )
-        models[model_id] = model
+        print(f"🔧 Ładowanie modelu '{model_id}' z: {model_path}")
+        
+        # Dla LoRA: załaduj tokenizer z adaptera (ma referencję do base)
+        if is_lora and base_model_path:
+            tokenizer = AutoTokenizer.from_pretrained(base_model_path)
+        else:
+            tokenizer = AutoTokenizer.from_pretrained(model_path)
+        
+        if tokenizer.pad_token is None:
+            tokenizer.pad_token = tokenizer.eos_token
+        
+        # Określ dtype
+        if torch_dtype_str == "float16":
+            torch_dtype = torch.float16
+        elif torch_dtype_str == "float32":
+            torch_dtype = torch.float32
+        else:
+            torch_dtype = "auto"
+        
+        # Załaduj model
+        if is_lora and base_model_path:
+            print(f"   📦 Wykryto LoRA adapter. Base model: {base_model_path}")
+            from peft import PeftModel
+            
+            # Załaduj base model
+            if use_4bit:
+                from transformers import BitsAndBytesConfig
+                quantization_config = BitsAndBytesConfig(
+                    load_in_4bit=True,
+                    bnb_4bit_compute_dtype=torch.float16
+                )
+                base_model = AutoModelForCausalLM.from_pretrained(
+                    base_model_path,
+                    quantization_config=quantization_config,
+                    device_map="auto"
+                )
+            else:
+                base_model = AutoModelForCausalLM.from_pretrained(
+                    base_model_path,
+                    dtype=torch_dtype
+                )
+                if device != "auto":
+                    base_model = base_model.to(device)
+            
+            # Załaduj adapter
+            print(f"   🔗 Ładowanie LoRA adaptera z: {model_path}")
+            model = PeftModel.from_pretrained(base_model, model_path)
+            
+            # Merge adapter dla wydajności (opcjonalnie)
+            if merge_adapter:
+                print(f"   🔀 Mergowanie adaptera z base modelem...")
+                model = model.merge_and_unload()
+                print(f"   ✅ Adapter zmergowany")
+            
+        elif use_4bit:
+            from transformers import BitsAndBytesConfig
+            quantization_config = BitsAndBytesConfig(
+                load_in_4bit=True,
+                bnb_4bit_compute_dtype=torch.float16
+            )
+            model = AutoModelForCausalLM.from_pretrained(
+                model_path,
+                quantization_config=quantization_config,
+                device_map="auto"
+            )
+        else:
+            model = AutoModelForCausalLM.from_pretrained(
+                model_path,
+                dtype=torch_dtype
+            )
+            if device != "auto":
+                model = model.to(device)
+        
+        models[model_id] = {
+            "model": model,
+            "tokenizer": tokenizer,
+            "device": str(model.device),
+            "max_length": max_length
+        }
+        
+        # Wczytaj kapsułę embeddingów jeśli istnieje
+        device_for_capsule = str(model.device).split(':')[0]  # cuda:0 -> cuda
+        load_memory_capsule(model_path, model_id, device=device_for_capsule)
+        
+        print(f"✅ Model '{model_id}' załadowany na {model.device}")
+        
         return jsonify({
-            "message": f"Model '{model_id}' loaded successfully from {model_path}.",
-            "success": True
+            "message": f"Model '{model_id}' loaded successfully.",
+            "success": True,
+            "has_memory_capsule": model_id in memory_capsules,
+            "device": str(model.device)
         }), 200
+        
     except Exception as e:
         return jsonify({
             "message": f"Failed to load model '{model_id}': {str(e)}\ntrace: {traceback.format_exc()}",
@@ -104,163 +227,128 @@ def load_model():
 @app.route("/chat", methods=["POST"])
 def chat():
     """
-    Generate responses using a chat-based format with user and assistant messages.
+    Generate responses using PyTorch model with DIRECT EMBEDDING INJECTION support.
 
     Expected JSON payload:
     {
-        "model_id": "unique_model_identifier",  // required: specifies which model to use
-        "character_id": "blacksmith_john",       // optional: character context from vector DB
-        "messages": [                            // required: array of message objects
-            {"role": "system", "content": "You are a helpful assistant."}, // optional system message
-            {"role": "user", "content": "Hello, how are you?"},            // user messages
-            {"role": "assistant", "content": "I'm doing well, thank you!"}, // assistant messages
-            {"role": "user", "content": "Tell me about yourself."}         // typically ends with user
+        "model_id": "unique_model_identifier",
+        "messages": [
+            {"role": "system", "content": "..."},
+            {"role": "user", "content": "..."}
         ],
-        "max_tokens": 100,                       // optional: maximum tokens to generate (default: 100)
-        "temperature": 0.8,                      // optional: sampling temperature (default: 0.8)
-        "top_p": 0.95,                           // optional: nucleus sampling top_p (default: 0.95)
-        "use_embedding": true                    // optional: auto-retrieve context from embeddings (default: false)
+        "max_tokens": 100,
+        "temperature": 0.8,
+        "top_p": 0.95,
+        "use_memory_capsule": true  // Wstrzykuje pre-computed embeddingi!
     }
-
-    Returns just the generated assistant response text.
     """
-    global models, registered_models, character_contexts
+    global models, registered_models, character_contexts, memory_capsules
     data = request.get_json()
     if not data:
         return jsonify({"message": "No input data provided.", "success": False}), 400
 
     model_id = data.get("model_id")
     messages = data.get("messages", [])
-    character_id = data.get("character_id")
-    use_embedding = data.get("use_embedding", False)
+    use_memory_capsule = data.get("use_memory_capsule", True)
 
     if not model_id or not messages:
         return jsonify({"message": "Missing required parameters: 'model_id' and 'messages'.", "success": False}), 400
 
-    # Auto-retrieve character context from embeddings if requested
-    if character_contexts is not None and (character_id or use_embedding):
-        try:
-            context_to_add = None
-            
-            if character_id:
-                # Direct lookup by character_id
-                result = character_contexts.get(ids=[character_id])
-                if result["documents"] and result["documents"]:
-                    context_to_add = result["documents"][0]
-            elif use_embedding and messages:
-                # Semantic search based on the last user message
-                user_messages = [msg for msg in messages if msg.get("role") == "user"]
-                if user_messages:
-                    last_user_msg = user_messages[-1]["content"]
-                    results = character_contexts.query(
-                        query_texts=[last_user_msg],
-                        n_results=1
-                    )
-                    if results["documents"] and results["documents"][0]:
-                        context_to_add = results["documents"][0][0]
-            
-            # Inject context as system message if found and no system message exists
-            if context_to_add:
-                has_system = any(msg.get("role") == "system" for msg in messages)
-                if not has_system:
-                    messages.insert(0, {"role": "system", "content": context_to_add})
-                    
-        except Exception as e:
-            # Don't fail the request if embedding retrieval fails
-            print(f"Warning: Failed to retrieve character context: {e}")
+    # Sprawdź czy model jest załadowany
+    if model_id not in models:
+        return jsonify({"message": f"Model '{model_id}' is not loaded. Load it first using /load.", "success": False}), 400
 
-    # Check if the model is registered
-    model_path = registered_models.get(model_id)
-    if model_path is None:
-        return jsonify({"message": f"Model '{model_id}' is not registered. Register it first using /register.", "success": False}), 400
+    model_dict = models[model_id]
+    model = model_dict["model"]
+    tokenizer = model_dict["tokenizer"]
+    device = model.device
 
-    # Unload all models except the requested one
-    to_unload = [mid for mid in models if mid != model_id]
-    for mid in to_unload:
-        try:
-            models.pop(mid)
-        except Exception:
-            pass  # Ignore unload errors
+    # Sformatuj wiadomości do promptu
+    formatted_prompt = format_chat_messages(messages)
+    
+    # Tokenizuj prompt użytkownika
+    input_ids = tokenizer.encode(formatted_prompt, return_tensors="pt").to(device)
+    
+    # 🚀 MAGIA: Wstrzyknięcie kapsuły jako embeddingi!
+    if use_memory_capsule and model_id in memory_capsules:
+        print(f"🧠 Wstrzykiwanie kapsuły embeddingów do kontekstu...")
+        
+        # Pobierz pre-computed embeddingi z kapsuły
+        capsule_embeddings = memory_capsules[model_id].to(device)
+        
+        # Pobierz embeddingi dla pytania użytkownika
+        with torch.no_grad():
+            query_embeddings = model.get_input_embeddings()(input_ids)
+        
+        # ⚡ CONCATENATION: Sklej kapsułę + pytanie
+        combined_embeddings = torch.cat([capsule_embeddings, query_embeddings], dim=1)
+        
+        print(f"   Kapsuła: {capsule_embeddings.shape}")
+        print(f"   Zapytanie: {query_embeddings.shape}")
+        print(f"   Połączone: {combined_embeddings.shape}")
+        
+        # Użyj inputs_embeds zamiast input_ids!
+        inputs_embeds = combined_embeddings
+        input_ids_for_generate = None
+    else:
+        # Bez kapsuły - normalny tryb
+        inputs_embeds = None
+        input_ids_for_generate = input_ids
 
-    # Load the requested model if not loaded
-    model = models.get(model_id)
-    if model is None:
-        n_ctx = data.get("n_ctx", 1024)
-        n_parts = data.get("n_parts", -1)
-        seed = data.get("seed", 42)
-        f16_kv = data.get("f16_kv", False)
-        n_gpu_layers = data.get("n_gpu_layers", -1)
-        try:
-            model = Llama(
-                model_path=model_path,
-                n_ctx=n_ctx,
-                n_parts=n_parts,
-                seed=seed,
-                f16_kv=f16_kv,
-                n_gpu_layers=n_gpu_layers,
-            )
-            models[model_id] = model
-        except Exception as e:
-            return jsonify({
-                "message": f"Failed to load model '{model_id}': {str(e)}\ntrace: {traceback.format_exc()}",
-                "success": False
-            }), 500
-
-    # 3. Validate messages
-    for msg in messages:
-        if not isinstance(msg, dict) or "role" not in msg or "content" not in msg:
-            return jsonify({"message": "Invalid message format. Each message must have 'role' and 'content' fields.", "success": False}), 400
-        if msg["role"] not in ["system", "user", "assistant"]:
-            return jsonify({"message": f"Invalid role: '{msg['role']}'. Must be 'system', 'user', or 'assistant'.", "success": False}), 400
-
-    # Optional parameters with default values
+    # Parametry generowania
     max_tokens = data.get("max_tokens", 100)
     temperature = data.get("temperature", 0.8)
     top_p = data.get("top_p", 0.95)
 
     try:
-        # Format the messages into a prompt
-        formatted_prompt = format_chat_messages(messages)
-        
-        # Generate response using the loaded LLaMA model
         start_time = time.time()
-        generated_text = ""
-        total_tokens = 0
-        stop_generating = False
-        for response in model(
-                formatted_prompt,
-                max_tokens=max_tokens,
-                temperature=temperature,
-                top_p=top_p,
-                stream=True # token-by-token response
-        ):
-            if "choices" in response and response["choices"]:
-                token = response["choices"][0]["text"]
-                generated_text += token
-                lower_generated_text = generated_text.lower()
-                tags = ["<assistant>", "<human>", "<npc>", "<system>", "</assistant>", "</human>", "</npc>", "</system>"]
-                for tag in tags:
-                    if tag in lower_generated_text:
-                        tag_pos = lower_generated_text.find(tag)
-                        generated_text = generated_text[:tag_pos]
-                        stop_generating = True
-                        break
-                if stop_generating:
-                    break
-                total_tokens += 1
-
-        # Calculate generation time
+        
+        # 🎯 GENEROWANIE z inputs_embeds!
+        with torch.no_grad():
+            if inputs_embeds is not None:
+                # Tryb z kapsułą - używamy inputs_embeds
+                outputs = model.generate(
+                    inputs_embeds=inputs_embeds,
+                    max_new_tokens=max_tokens,
+                    temperature=temperature,
+                    top_p=top_p,
+                    do_sample=True,
+                    pad_token_id=tokenizer.pad_token_id,
+                    eos_token_id=tokenizer.eos_token_id
+                )
+            else:
+                # Tryb normalny - używamy input_ids
+                outputs = model.generate(
+                    input_ids_for_generate,
+                    max_new_tokens=max_tokens,
+                    temperature=temperature,
+                    top_p=top_p,
+                    do_sample=True,
+                    pad_token_id=tokenizer.pad_token_id,
+                    eos_token_id=tokenizer.eos_token_id
+                )
+        
+        # Dekoduj odpowiedź
+        if inputs_embeds is not None:
+            # Z inputs_embeds - dekoduj tylko wygenerowaną część
+            generated_text = tokenizer.decode(outputs[0], skip_special_tokens=True)
+        else:
+            # Normalny tryb - usuń prompt z odpowiedzi
+            generated_text = tokenizer.decode(outputs[0][input_ids.shape[1]:], skip_special_tokens=True)
+        
         generation_time = time.time() - start_time
+        
         return jsonify({
             "response": generated_text.strip(),
-            "generation_time": round(generation_time, 3),  # Round to 3 decimal places
+            "generation_time": round(generation_time, 3),
             "model_id": model_id,
-            "total_tokens": total_tokens,
+            "used_embedding_capsule": use_memory_capsule and model_id in memory_capsules,
             "success": True
         }), 200
+        
     except Exception as e:
         return jsonify({
-            "message": f"Chat completion failed for model '{model_id}': {str(e)}\ntrace:{traceback.format_exc()}",
+            "message": f"Chat completion failed: {str(e)}\ntrace:{traceback.format_exc()}",
             "success": False
         }), 500
 
@@ -303,22 +391,22 @@ def unload_model():
 @app.route("/status", methods=["GET"])
 def status():
     """
-    Returns ids of all loaded models.
+    Returns status of loaded models.
     """
     global models
 
-    gpu = False
-    try:
-        p = pathlib.Path(llama_cpp.__file__).parent
-        lib = load_shared_library('llama', pathlib.Path(p) / 'lib')
-        gpu = bool(lib.llama_supports_gpu_offload())
-    except:
-        pass
+    model_info = {}
+    for model_id, model_dict in models.items():
+        model_info[model_id] = {
+            "device": model_dict.get("device", "unknown"),
+            "has_capsule": model_id in memory_capsules
+        }
     
     return jsonify({
         "healthy": True,
         "models": list(models.keys()),
-        "gpu": gpu
+        "model_details": model_info,
+        "gpu_available": torch.cuda.is_available()
     }), 200
 
 @app.route("/list-files", methods=["POST"])
@@ -626,4 +714,4 @@ def format_chat_messages(messages):
 
 if __name__ == '__main__':
     # On Windows, use_reloader=False prevents OSError with select.select()
-    app.run(host='0.0.0.0', port=5000, debug=False)
+    app.run(host='0.0.0.0', port=5000, debug=True, use_reloader=False)

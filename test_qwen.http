@@ -1,0 +1,40 @@
+### 1. Sprawdź status serwera
+GET http://localhost:5000/status
+
+### 2. Załaduj model Qwen z LoRA i kapsułą
+POST http://localhost:5000/load
+Content-Type: application/json
+
+{
+  "model_id": "qwen_detective",
+  "model_path": "qwen-3b-distilled_latest",
+  "is_lora": true,
+  "base_model_path": "Qwen/Qwen2.5-3B-Instruct",
+  "torch_dtype": "float16"
+}
+
+### 3. Testuj czat Z KAPSUŁĄ (embeddingi wstrzyknięte!)
+POST http://localhost:5000/chat
+Content-Type: application/json
+
+{
+  "model_id": "qwen_detective",
+  "messages": [
+    {"role": "user", "content": "Dzień dobry. Jestem detektywem z miasta. Czy mogę zadać kilka pytań?"}
+  ],
+  "max_tokens": 150,
+  "use_memory_capsule": true
+}
+
+### 4. Testuj czat BEZ kapsuły (normalny tryb)
+POST http://localhost:5000/chat
+Content-Type: application/json
+
+{
+  "model_id": "qwen_detective",
+  "messages": [
+    {"role": "user", "content": "Cześć, jak się masz?"}
+  ],
+  "max_tokens": 100,
+  "use_memory_capsule": false
+}
